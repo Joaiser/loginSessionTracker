@@ -21,7 +21,7 @@ class Loginsessiontracker extends Module
 
     public function install()
     {
-        return parent::install() 
+        return parent::install()
             && $this->registerHook('displayHeader')
             && $this->createDatabaseTable();
     }
@@ -48,7 +48,7 @@ class Loginsessiontracker extends Module
 
         return Db::getInstance()->execute($sql);
     }
-    
+
     private function removeDatabaseTable()
     {
         $sql = "DROP TABLE IF EXISTS " . _DB_PREFIX_ . "loginsessiontracker";

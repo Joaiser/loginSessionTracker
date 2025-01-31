@@ -1,25 +1,19 @@
-document.addEventListener("DOMContentLoaded", function () {
-    let startTime = Date.now();
+let sessionStartTime = new Date().getTime();
 
-    // Escuchar el evento de cierre de la página
-    window.addEventListener("beforeunload", function () {
-        let duration = Math.floor((Date.now() - startTime) / 1000);
-        let data = JSON.stringify({
-            duration: duration,
-            page: window.location.pathname
-        });
+window.addEventListener('beforeunload', function() {
+    let duration = Math.round((new Date().getTime() - sessionStartTime) / 1000); // en segundos
+    let page = window.location.pathname; // O cualquier otra información que desees
+    let data = {
+        duration: duration,
+        page: page
+    };
 
-        // Usar sendBeacon para asegurar que los datos se envíen sin interrumpir la navegación
-        navigator.sendBeacon("modules/loginsessiontracker/ajax.php", data);
-
-        // También puedes usar fetch para un manejo más detallado, si es necesario
-        fetch("modules/loginsessiontracker/ajax.php", {
-            method: "POST",
-            body: data,
-            headers: { "Content-Type": "application/json" }
-        })
-        .then(response => response.json())
-        .then(data => console.log("Respuesta del servidor:", data))
-        .catch(error => console.error("Error:", error));
+    // Enviar los datos al servidor
+    fetch('/modules/loginsessiontracker/close_session.php', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
     });
 });
