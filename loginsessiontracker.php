@@ -14,16 +14,17 @@ class Loginsessiontracker extends Module
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7', 'max' => _PS_VERSION_];
         $this->bootstrap = true;
-        parent::__construct();
         $this->displayName = $this->l('Login Session Tracker');
         $this->description = $this->l('Registra el inicio de sesión y la navegación de los usuarios.');
+        parent::__construct();
     }
 
     public function install()
     {
         return parent::install()
             && $this->registerHook('displayHeader')
-            && $this->createDatabaseTable();
+            && $this->createDatabaseTable()
+            && $this->registerHook('actionAuthentication');
     }
 
     public function uninstall()
@@ -33,29 +34,36 @@ class Loginsessiontracker extends Module
 
     private function createDatabaseTable()
     {
-        $sql = "CREATE TABLE IF NOT EXISTS " . _DB_PREFIX_ . "loginsessiontracker (
-            id_log INT AUTO_INCREMENT PRIMARY KEY,
-            id_customer INT NOT NULL,
-            fecha_inicio DATETIME NOT NULL,
-            fecha_fin DATETIME NULL,
-            duracion INT NULL,
-            pagina_visitada TEXT NULL,
-            total_sesiones INT DEFAULT 1,
-            dispositivo VARCHAR(50) NULL,
-            navegador VARCHAR(50) NULL,
-            INDEX (id_customer)
-        ) ENGINE=" . _MYSQL_ENGINE_ . " DEFAULT CHARSET=utf8;";
+        $sql1 = "CREATE TABLE IF NOT EXISTS " . _DB_PREFIX_ . "loginsessiontracker (
+        id_log INT AUTO_INCREMENT PRIMARY KEY,
+        id_customer INT NOT NULL,
+        fecha_inicio DATETIME NOT NULL,
+        fecha_fin DATETIME NULL,
+        dispositivo VARCHAR(50) NULL,
+        navegador VARCHAR(50) NULL,
+        INDEX (id_customer)
+    ) ENGINE=" . _MYSQL_ENGINE_ . " DEFAULT CHARSET=utf8;";
 
-        return Db::getInstance()->execute($sql);
+        $sql2 = "CREATE TABLE IF NOT EXISTS " . _DB_PREFIX_ . "loginsession_pages (
+        id_page_log INT AUTO_INCREMENT PRIMARY KEY,
+        id_log INT NOT NULL,
+        pagina_visitada TEXT,
+        fecha DATETIME NOT NULL,
+        INDEX (id_log),
+        FOREIGN KEY (id_log) REFERENCES " . _DB_PREFIX_ . "loginsessiontracker(id_log) ON DELETE CASCADE
+    ) ENGINE=" . _MYSQL_ENGINE_ . " DEFAULT CHARSET=utf8;";
+
+        return Db::getInstance()->execute($sql1) && Db::getInstance()->execute($sql2);
     }
+
 
     private function removeDatabaseTable()
     {
         $sql = "DROP TABLE IF EXISTS " . _DB_PREFIX_ . "loginsessiontracker";
-        return Db::getInstance()->execute($sql);
+        $sql2 = "DROP TABLE IF EXISTS " . _DB_PREFIX_ . "loginsession_pages";
+        return Db::getInstance()->execute($sql) && Db::getInstance()->execute($sql2);
     }
 
-    // Para manejar el cierre de sesión y calcular la duración de la sesión cuando la pestaña se cierre o el navegador se cierre
     public function trackSessionClose($id_customer)
     {
         if (!$id_customer) {
@@ -69,13 +77,11 @@ class Loginsessiontracker extends Module
                 WHERE id_customer = " . (int) $id_customer . " ORDER BY fecha_inicio DESC LIMIT 1";
         $fecha_inicio = Db::getInstance()->getValue($sql);
         if ($fecha_inicio) {
-            $duration = strtotime($fecha_fin) - strtotime($fecha_inicio);
 
             Db::getInstance()->update(
                 'loginsessiontracker',
                 [
                     'fecha_fin' => $fecha_fin,
-                    'duracion' => $duration
                 ],
                 'id_customer = ' . (int) $id_customer . ' AND fecha_inicio = "' . pSQL($fecha_inicio) . '"'
             );
@@ -84,80 +90,119 @@ class Loginsessiontracker extends Module
 
     public function hookDisplayHeader()
     {
-        if (!$this->context->customer->isLogged()) {
-            return;
+        try {
+            if (!$this->context->customer->isLogged()) {
+                return;
+            }
+
+            $id_customer = (int)$this->context->customer->id;
+            $current_url = pSQL("https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI']);
+
+            if ($this->context->controller->php_self == 'pagenotfound') {
+                return;
+            }
+
+            // Obtener sesión activa
+            $active_session = Db::getInstance()->getValue('
+                SELECT id_log FROM ' . _DB_PREFIX_ . 'loginsessiontracker
+                WHERE id_customer = ' . $id_customer . '
+                AND fecha_fin IS NULL
+                ORDER BY fecha_inicio DESC
+            ');
+
+            if (!$active_session) {
+                Db::getInstance()->insert('loginsessiontracker', [
+                    'id_customer' => $id_customer,
+                    'fecha_inicio' => date('Y-m-d H:i:s'),
+                    'dispositivo' => pSQL($this->getDeviceType()),
+                    'navegador' => pSQL($this->getBrowser())
+                ]);
+                $active_session = Db::getInstance()->Insert_ID();
+            }
+
+            // Registrar página visitada
+            Db::getInstance()->insert('loginsession_pages', [
+                'id_log' => (int)$active_session,
+                'pagina_visitada' => $current_url,
+                'fecha' => date('Y-m-d H:i:s')
+            ]);
+
+            $this->context->controller->registerJavascript(
+                'module-loginsessiontracker-js',
+                'modules/' . $this->name . '/views/js/sessionTracker.js',
+                ['position' => 'bottom', 'priority' => 150]
+            );
+        } catch (Exception $e) {
+            PrestaShopLogger::addLog('Error en hookDisplayHeader: ' . $e->getMessage(), 3);
         }
+    }
 
-        $id_customer = (int) $this->context->customer->id;
-        $current_page = pSQL($_SERVER['REQUEST_URI']); // Capturar la url completa
-        if ($this->context->controller->php_self == 'pagenotfound') {
-            return;
+
+    public function hookActionAuthentication($params)
+    {
+        try {
+            PrestaShopLogger::addLog('hookActionAuthentication ejecutado', 1);
+
+            if (!isset($params['customer']) || !Validate::isLoadedObject($params['customer'])) {
+                PrestaShopLogger::addLog('Cliente no válido en hookActionAuthentication', 2);
+                return;
+            }
+
+            $customer = $params['customer'];
+            $id_customer = (int)$customer->id;
+            $activeSessions = (int)Db::getInstance()->getValue(
+                'SELECT COUNT(*) FROM ' . _DB_PREFIX_ . 'loginsessiontracker 
+                WHERE id_customer = ' . (int)$id_customer . ' 
+                AND fecha_fin IS NULL'
+            );
+
+            PrestaShopLogger::addLog("Sesiones activas actuales: $activeSessions", 1);
+
+            if ($activeSessions === 0) {
+                Db::getInstance()->insert('loginsessiontracker', [
+                    'id_customer' => $id_customer,
+                    'fecha_inicio' => date('Y-m-d H:i:s'),
+                    'dispositivo' => pSQL($this->getDeviceType()),
+                    'navegador' => pSQL($this->getBrowser())
+                ]);
+                PrestaShopLogger::addLog('Sesión iniciada en hookActionAuthentication', 1);
+            }
+        } catch (Exception $e) {
+            PrestaShopLogger::addLog('[ERROR] hookActionAuthentication: ' . $e->getMessage(), 3);
         }
+    }
 
-        $fecha_actual = date('Y-m-d H:i:s');
 
-        // Registrar dispositivo y navegador
-        $device = 'PC'; // Valor por defecto
-        if (preg_match('/mobile/i', $_SERVER['HTTP_USER_AGENT'])) {
-            $device = 'Móvil';
-        } elseif (preg_match('/tablet/i', $_SERVER['HTTP_USER_AGENT'])) {
-            $device = 'Tablet'; // Añadir la opción para Tablet
+    // Nuevos métodos auxiliares
+    private function getDeviceType()
+    {
+        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        if (preg_match('/mobile/i', $userAgent)) {
+            return 'Móvil';
+        } elseif (preg_match('/tablet/i', $userAgent)) {
+            return 'Tablet';
         }
+        return 'PC';
+    }
 
-        $browser = '';
-        if (strpos($_SERVER['HTTP_USER_AGENT'], 'Chrome') !== false) {
-            $browser = 'Chrome';
-        } elseif (strpos($_SERVER['HTTP_USER_AGENT'], 'Firefox') !== false) {
-            $browser = 'Firefox';
-        } elseif (strpos($_SERVER['HTTP_USER_AGENT'], 'Safari') !== false) {
-            $browser = 'Safari';
-        } elseif (strpos($_SERVER['HTTP_USER_AGENT'], 'Opera') !== false) {
-            $browser = 'Opera';
-        } elseif (strpos($_SERVER['HTTP_USER_AGENT'], 'MSIE') !== false) {
-            $browser = 'Internet Explorer';
-        } elseif (strpos($_SERVER['HTTP_USER_AGENT'], 'Edge') !== false) {
-            $browser = 'Edge';
-        } elseif (strpos($_SERVER['HTTP_USER_AGENT'], 'Brave') !== false) {
-            $browser = 'Brave';
-        } else {
-            $browser = 'Otro';
+    private function getBrowser()
+    {
+        $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+        $browsers = [
+            'Chrome' => 'Chrome',
+            'Firefox' => 'Firefox',
+            'Safari' => 'Safari',
+            'Opera' => 'Opera',
+            'MSIE' => 'Internet Explorer',
+            'Edge' => 'Edge',
+            'Brave' => 'Brave'
+        ];
+
+        foreach ($browsers as $key => $value) {
+            if (strpos($userAgent, $key) !== false) {
+                return $value;
+            }
         }
-
-        // Insertar en la base de datos sin geolocalización
-        Db::getInstance()->insert('loginsessiontracker', [
-            'id_customer' => $id_customer,
-            'fecha_inicio' => $fecha_actual,
-            'pagina_visitada' => $current_page,
-            'dispositivo' => pSQL($device),
-            'navegador' => pSQL($browser)
-        ]);
-
-        // Registrar un historial de visitas
-        $lastVisit = Db::getInstance()->getValue(
-            "SELECT pagina_visitada FROM " . _DB_PREFIX_ . "loginsessiontracker
-            WHERE id_customer = " . (int) $id_customer . " ORDER BY fecha_inicio DESC LIMIT 1"
-        );
-
-        $newVisit = $lastVisit ? $lastVisit . ' -> ' . pSQL($_SERVER['REQUEST_URI']) : pSQL($_SERVER['REQUEST_URI']);
-
-        Db::getInstance()->update(
-            'loginsessiontracker',
-            ['pagina_visitada' => $newVisit],
-            'id_customer = ' . (int) $id_customer . ' ORDER BY fecha_inicio DESC LIMIT 1'
-        );
-
-        // Incrementar el número de sesiones
-        Db::getInstance()->update(
-            'loginsessiontracker',
-            ['total_sesiones' => ['type' => 'sql', 'value' => 'total_sesiones + 1']],
-            'id_customer = ' . (int) $id_customer
-        );
-
-        // Registrar el javascript para el rastreo de sesión
-        $this->context->controller->registerJavascript(
-            'module-loginsessiontracker-js',
-            'modules/' . $this->name . '/views/js/sessionTracker.js',
-            ['position' => 'bottom', 'priority' => 150]
-        );
+        return 'Otro';
     }
 }

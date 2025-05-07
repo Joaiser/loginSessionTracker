@@ -1,19 +1,26 @@
-let sessionStartTime = new Date().getTime();
+class SessionTracker {
+    constructor() {
+        this.trackingEndpoint = '/modules/loginsessiontracker/close_session.php';
+        this.initEvents();
+    }
 
-window.addEventListener('beforeunload', function() {
-    let duration = Math.round((new Date().getTime() - sessionStartTime) / 1000); // en segundos
-    let page = window.location.pathname; // O cualquier otra información que desees
-    let data = {
-        duration: duration,
-        page: page
-    };
+    initEvents() {
+        // Solo eventos esenciales para cerrar sesión
+        window.addEventListener('beforeunload', () => this.endSession());
+        window.addEventListener('pagehide', () => this.endSession());
+    }
 
-    // Enviar los datos al servidor
-    fetch('/modules/loginsessiontracker/close_session.php', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-    });
-});
+    endSession() {
+        const data = {
+            page: window.location.href
+        };
+
+        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+        navigator.sendBeacon(this.trackingEndpoint, blob);
+    }
+}
+
+// Iniciar solo si el usuario está logueado
+if (typeof isLogged !== 'undefined' && isLogged) {
+    new SessionTracker();
+}

@@ -3,34 +3,70 @@ if (!defined('_PS_VERSION_')) {
     exit;
 }
 
-// Verificar si la petición es POST y si contiene los datos
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty(file_get_contents("php://input"))) {
-    $data = json_decode(file_get_contents("php://input"), true);
-    
-    // Obtener los datos enviados por JS
-    $duration = isset($data['duration']) ? (int)$data['duration'] : 0;
-    $page = isset($data['page']) ? pSQL($data['page']) : '';
+require_once __DIR__ . '/../../config/config.inc.php';
+require_once __DIR__ . '/../../init.php';
 
-    // Si el ID del cliente está disponible en el contexto, registrar la sesión
-    if (Context::getContext()->customer->isLogged()) {
-        $id_customer = (int) Context::getContext()->customer->id;
-        $fecha_fin = date('Y-m-d H:i:s');
+header('Content-Type: application/json');
 
-        // Registrar la duración y la página visitada
-        $sql = "UPDATE " . _DB_PREFIX_ . "loginsessiontracker
-                SET fecha_fin = '$fecha_fin', duracion = $duration, pagina_visitada = '$page'
-                WHERE id_customer = $id_customer AND fecha_fin IS NULL";
-
-        Db::getInstance()->execute($sql);
-
-        // Incrementar el número de sesiones si es necesario:
-        Db::getInstance()->update('loginsessiontracker', [
-            'total_sesiones' => ['type' => 'sql', 'value' => 'total_sesiones + 1']
-        ], 'id_customer = ' . $id_customer);
+try {
+    // Verificar método POST
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        throw new Exception('Método no permitido');
     }
 
-    // Responder con éxito
-    echo json_encode(['status' => 'success']);
-} else {
-    echo json_encode(['status' => 'error', 'message' => 'No data received']);
+    // Obtener datos
+    $input = file_get_contents('php://input');
+    if (!$input) {
+        throw new Exception('No se recibieron datos');
+    }
+
+    $data = json_decode($input, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        throw new Exception('Datos JSON inválidos');
+    }
+
+    // Verificar usuario autenticado
+    if (!Context::getContext()->customer->isLogged()) {
+        throw new Exception('Usuario no autenticado');
+    }
+
+    $id_customer = (int)Context::getContext()->customer->id;
+    $fecha_fin = date('Y-m-d H:i:s');
+
+    // Actualizar sesión activa
+    $result = Db::getInstance()->update('loginsessiontracker', [
+        'fecha_fin' => $fecha_fin
+    ], 'id_customer = ' . $id_customer . ' AND fecha_fin IS NULL');
+
+    if (!$result) {
+        throw new Exception('No se encontraron sesiones activas para cerrar');
+    }
+
+    // Registrar última página visitada si se proporcionó
+    if (isset($data['page']) && !empty($data['page'])) {
+        $last_session = Db::getInstance()->getValue('
+            SELECT id_log FROM ' . _DB_PREFIX_ . 'loginsessiontracker
+            WHERE id_customer = ' . $id_customer . '
+            ORDER BY fecha_inicio DESC LIMIT 1
+        ');
+
+        if ($last_session) {
+            Db::getInstance()->insert('loginsession_pages', [
+                'id_log' => (int)$last_session,
+                'pagina_visitada' => pSQL($data['page']),
+                'fecha' => $fecha_fin
+            ]);
+        }
+    }
+
+    echo json_encode([
+        'status' => 'success',
+        'message' => 'Sesión cerrada correctamente'
+    ]);
+} catch (Exception $e) {
+    http_response_code(400);
+    echo json_encode([
+        'status' => 'error',
+        'message' => $e->getMessage()
+    ]);
 }
