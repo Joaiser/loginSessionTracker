@@ -39,8 +39,10 @@ class Loginsessiontracker extends Module
         id_customer INT NOT NULL,
         fecha_inicio DATETIME NOT NULL,
         fecha_fin DATETIME NULL,
+        last_ping DATETIME NULL,
         dispositivo VARCHAR(50) NULL,
         navegador VARCHAR(50) NULL,
+        UNIQUE KEY unique_active_session (id_customer, fecha_fin),
         INDEX (id_customer)
     ) ENGINE=" . _MYSQL_ENGINE_ . " DEFAULT CHARSET=utf8;";
 
@@ -59,9 +61,43 @@ class Loginsessiontracker extends Module
 
     private function removeDatabaseTable()
     {
-        $sql = "DROP TABLE IF EXISTS " . _DB_PREFIX_ . "loginsessiontracker";
-        $sql2 = "DROP TABLE IF EXISTS " . _DB_PREFIX_ . "loginsession_pages";
-        return Db::getInstance()->execute($sql) && Db::getInstance()->execute($sql2);
+        try {
+            $connection = Db::getInstance();
+            $connection->execute('SET FOREIGN_KEY_CHECKS = 0');
+
+            // Verificar si las tablas existen antes de intentar eliminarlas
+            $pagesTableExists = $connection->getValue('
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = DATABASE() 
+                AND table_name = "' . _DB_PREFIX_ . 'loginsession_pages"
+            ');
+
+            $mainTableExists = $connection->getValue('
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = DATABASE() 
+                AND table_name = "' . _DB_PREFIX_ . 'loginsessiontracker"
+            ');
+
+            $success = true;
+
+            if ($pagesTableExists) {
+                $success = $success && $connection->execute('DROP TABLE ' . _DB_PREFIX_ . 'loginsession_pages');
+            }
+
+            if ($mainTableExists) {
+                $success = $success && $connection->execute('DROP TABLE ' . _DB_PREFIX_ . 'loginsessiontracker');
+            }
+
+            $connection->execute('SET FOREIGN_KEY_CHECKS = 1');
+
+            return $success;
+        } catch (Exception $e) {
+            // Registrar el error y continuar
+            PrestaShopLogger::addLog('Error al eliminar tablas: ' . $e->getMessage(), 3);
+            return false;
+        }
     }
 
     public function trackSessionClose($id_customer)
