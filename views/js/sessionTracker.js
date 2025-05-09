@@ -9,19 +9,29 @@ class SessionTracker {
         this.inactivityTimer = null;
         this.sessionId = null;
 
+        console.log('[SessionTracker] Inicializando...');
         this.initEvents();
         this.startSession();
     }
 
     initEvents() {
-        // Eventos de actividad
-        ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'].forEach(event => {
-            window.addEventListener(event, () => this.recordActivity());
+        const activityEvents = ['mousemove', 'keydown', 'scroll', 'click', 'touchstart'];
+        activityEvents.forEach(event => {
+            window.addEventListener(event, () => {
+                this.recordActivity();
+                console.log(`[SessionTracker] Actividad detectada: ${event}`);
+            });
         });
 
-        // Eventos de cierre
-        window.addEventListener('beforeunload', () => this.closeSession());
-        window.addEventListener('pagehide', () => this.closeSession());
+        window.addEventListener('beforeunload', () => {
+            console.log('[SessionTracker] Evento beforeunload: cerrando sesión');
+            this.closeSession();
+        });
+
+        window.addEventListener('pagehide', () => {
+            console.log('[SessionTracker] Evento pagehide: cerrando sesión');
+            this.closeSession();
+        });
     }
 
     recordActivity() {
@@ -29,6 +39,7 @@ class SessionTracker {
     }
 
     startSession() {
+        console.log('[SessionTracker] Iniciando sesión...');
         this.sendPing(); // Ping inicial
         this.startPingInterval();
         this.startInactivityCheck();
@@ -36,13 +47,17 @@ class SessionTracker {
 
     startPingInterval() {
         this.pingTimer = setInterval(() => {
+            console.log('[SessionTracker] Ejecutando ping programado...');
             this.sendPing();
         }, this.pingInterval);
     }
 
     startInactivityCheck() {
         this.inactivityTimer = setInterval(() => {
-            if (Date.now() - this.lastActivity > this.inactivityTimeout) {
+            const inactivo = Date.now() - this.lastActivity > this.inactivityTimeout;
+            console.log(`[SessionTracker] Verificando inactividad... ${inactivo ? 'INACTIVO' : 'Activo'}`);
+            if (inactivo) {
+                console.warn('[SessionTracker] Usuario inactivo, cerrando sesión...');
                 this.closeSession();
             }
         }, 60000); // Verificar cada minuto
@@ -50,6 +65,7 @@ class SessionTracker {
 
     async sendPing() {
         try {
+            console.log('[SessionTracker] Enviando ping al servidor...');
             const response = await fetch(this.pingEndpoint, {
                 method: 'POST',
                 headers: {
@@ -57,7 +73,6 @@ class SessionTracker {
                     'X-Requested-With': 'XMLHttpRequest'
                 },
                 body: JSON.stringify({
-                    page: window.location.href,
                     timestamp: new Date().toISOString()
                 }),
                 credentials: 'include'
@@ -69,25 +84,29 @@ class SessionTracker {
 
             const text = await response.text();
             if (!text) {
-                throw new Error('Empty response from server');
+                throw new Error('Respuesta vacía del servidor');
             }
 
             const data = JSON.parse(text);
+            console.log('[SessionTracker] Respuesta del servidor:', data);
+
             if (data.success && data.session_id) {
+                if (!this.sessionId) {
+                    console.log(`[SessionTracker] Sesión iniciada con ID: ${data.session_id}`);
+                }
                 this.sessionId = data.session_id;
+            } else {
+                console.warn('[SessionTracker] Ping fallido o sin sesión activa.');
             }
         } catch (error) {
-            console.error('Error en ping:', error);
-            // Opcional: reintentar o notificar al usuario
+            console.error('[SessionTracker] Error en sendPing:', error);
         }
     }
 
     closeSession() {
-        // Limpiar intervalos
         clearInterval(this.pingTimer);
         clearInterval(this.inactivityTimer);
 
-        // Enviar cierre de sesión
         if (this.sessionId) {
             const data = {
                 session_id: this.sessionId,
@@ -95,13 +114,15 @@ class SessionTracker {
                 timestamp: new Date().toISOString()
             };
 
+            console.log(`[SessionTracker] Cerrando sesión con ID: ${this.sessionId}`);
             navigator.sendBeacon(this.closeEndpoint, new Blob(
                 [JSON.stringify(data)],
                 { type: 'application/json' }
             ));
+        } else {
+            console.warn('[SessionTracker] No hay sessionId, no se puede cerrar sesión');
         }
     }
 }
 
-// Iniciar tracker siempre (la verificación de login se hace en el servidor)
 new SessionTracker();

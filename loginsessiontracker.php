@@ -109,9 +109,9 @@ class Loginsessiontracker extends Module
         $fecha_fin = date('Y-m-d H:i:s');
 
         // Calcular la duración en segundos
-        $sql = "SELECT fecha_inicio FROM " . _DB_PREFIX_ . "loginsessiontracker
-                WHERE id_customer = " . (int) $id_customer . " ORDER BY fecha_inicio DESC LIMIT 1";
-        $fecha_inicio = Db::getInstance()->getValue($sql);
+        $sql = 'SELECT fecha_inicio FROM `' . _DB_PREFIX_ . 'loginsessiontracker` WHERE id_customer = ? ORDER BY fecha_inicio DESC LIMIT 1';
+        $fecha_inicio = Db::getInstance()->getValue($sql, [$id_customer]);
+
         if ($fecha_inicio) {
 
             Db::getInstance()->update(
@@ -140,11 +140,12 @@ class Loginsessiontracker extends Module
 
             // Obtener sesión activa
             $active_session = Db::getInstance()->getValue('
-                SELECT id_log FROM ' . _DB_PREFIX_ . 'loginsessiontracker
-                WHERE id_customer = ' . $id_customer . '
-                AND fecha_fin IS NULL
-                ORDER BY fecha_inicio DESC
-            ');
+            SELECT id_log FROM ' . _DB_PREFIX_ . 'loginsessiontracker
+            WHERE id_customer = ' . $id_customer . '
+            AND fecha_fin IS NULL
+            AND fecha_inicio > NOW() - INTERVAL 30 MINUTE
+            ORDER BY fecha_inicio DESC
+        ');
 
             if (!$active_session) {
                 Db::getInstance()->insert('loginsessiontracker', [
